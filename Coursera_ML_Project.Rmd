@@ -1,0 +1,130 @@
+---
+title: "Movement Classification Machine Learning Project"
+author: "Christian"
+date: "1/13/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+```{r, warning=FALSE, message = FALSE}
+library(caret)
+library(ggplot2)
+library(randomForest)
+library(dplyr)
+library(scales)
+```
+##Data Cleaning
+
+###Load the Data from the Web Source
+```{r}
+model_set <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",header=TRUE,na.strings=c("NA","#DIV/0!",""))
+quiz_set <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",header=TRUE,na.strings=c("NA","#DIV/0!",""))
+```
+
+###Remove Unhelpful Columns
+
+The below code is used to remove any columns with missing values in the original training data set.
+```{r}
+set.seed(3309)
+inTrain <- createDataPartition(model_set$classe,p = 0.5,list= FALSE)
+training <- model_set[inTrain,colSums(is.na(model_set)) == 0]
+testing <- model_set[-inTrain,colSums(is.na(model_set)) == 0]
+```
+
+This code segment removes the first 6 columns because they do not include information that we expect to hold any predictive power, and also identifies and removes any columns that exhibit little or no variance.
+```{r}
+training <- training[,-c(1:6)]
+testing <- testing[,-c(1:6)]
+
+nz <- nearZeroVar(training, saveMetrics = TRUE)
+training <- training[,nz$nzv == FALSE]
+testing <- testing[,nz$nzv == FALSE]
+```
+
+##Building the Model
+
+We choose to fit a random forest model to predict the classe variable. Code is also included to run a  boosted model; however, after some investigation, it is clear that the random forest is a more suitable classifier.
+```{r}
+#set.seed(5346)
+#boost_mod <- train(classe ~ .,method = "gbm",data = training,verbose = FALSE)
+#checked <- predict(boost_mod,newdata = testing)
+#confusionMatrix(testing$classe,checked)
+
+#Fit the model and build a confusion matric for plotting.
+set.seed(54321)
+rf <- randomForest(classe ~ .,data = training)
+```
+
+###Investigating the Model
+
+Through successive resampling, the random forest achieves a reduction in variance that is similar to a cross fold validation. However, below we graph the estimated out of sample error at different numbers of variables for selection using ten folds for cross validation. Interestingly, the model fits best at 4 and 9 variables fitted, and somewhat worse with 6 variables. As the graph makes clear, adding more than ten features to the model is not helpful and results in overfitting.
+```{r, warning = FALSE}
+set.seed(12345)
+cv <- rfcv(training[,-ncol(training)],training[,ncol(training)],cv.fold = 10, scale = "log",step = .7)
+feature_quant <- cbind.data.frame(cv$n.var,cv$error.cv)
+names(feature_quant) <- c("num_var","error")
+
+ggplot(data = feature_quant,mapping = aes(x = num_var, y = error)) +
+  geom_smooth(method = "loess",se = FALSE) +
+  geom_point() +
+  scale_y_continuous(labels = percent, limits = c(0,.02)) + 
+  ggtitle("Cross Validation Plot\nModel Results with N Variables Selected") +
+  labs(x = "Number of Variables Selected",y = "Estimated Out of Sample Error") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_text(mapping = aes(label = as.factor(num_var)),vjust = -1)
+```
+
+The variable importance plot makes clear that the first ten variables are considerably more prominent in terms of feature importance than the rest, and also that the variance of the importance of the remaining variables is considerably lower than that of the most important ten. The features num_window and roll_belt are far more predictive than any other variable in the model.
+```{r}
+varImpPlot(rf, main = "Random Forest Variable Importance",n.var = 20)
+```
+
+
+
+
+##Evaluating the Results
+
+The results of the confusion matrix below suggest an out of sample accuracy of 99.52% and a corresponding out of sample error of 0.38%. 
+```{r}
+predictions <- predict(rf,newdata = testing)
+classe <- testing$classe
+confusionMatrix(classe,predictions)
+```
+
+The confusion matrix is better visualized with this chart.
+```{r}
+mat <- cbind.data.frame(classe,predictions)
+summed <- mat %>% group_by(classe) %>% summarise(total = n()) %>% mutate(new_classe = classe)
+new_mat <- mat %>%
+  group_by(classe,predictions) %>%
+  summarise(counts = n()) %>%
+  left_join(summed,by = c("classe"="new_classe")) %>%
+  mutate(confusion = counts/total) %>%
+  select(classe,predictions,confusion)
+
+#Plot the confusion matrix.
+ggplot(data = new_mat,mapping = aes(x = predictions, y = classe,fill = confusion)) +
+  geom_tile(color = 'black') + scale_fill_gradient(low = "white",high = "darkseagreen4") +
+  geom_text(stat = "identity",mapping = aes(label = scales::percent(confusion))) +
+  theme(panel.background = element_rect(fill = "white",colour = "black"), plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Predicted Classe", y = "Actual Classe") +
+  ggtitle("Movement Type Classifier\nConfusion Matrix")
+```
+
+##Conclusion
+The random forest performs ably to predict motion type based on sensor data.
+
+
+
+
+
+
+
+
+
